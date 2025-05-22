@@ -1,8 +1,7 @@
-// lib/screens/currency_screen.dart
+// lib/screens/currency_screen.dart (Atualizado com API Real)
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
-import 'dart:math';
 import '../models/currency.dart';
 import '../services/currency_service.dart';
 
@@ -21,9 +20,8 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
   
   // Selected currency for detailed view
   Currency? _selectedCurrency;
-  
-  // Mock data for currency history graph
-  List<FlSpot> _mockHistoryData = [];
+  List<Currency> _currencyHistory = [];
+  bool _isLoadingHistory = false;
   
   @override
   void initState() {
@@ -38,6 +36,13 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
     });
     
     try {
+      // Verificar se a API está funcionando
+      final isWorking = await _currencyService.isApiWorking();
+      
+      if (!isWorking) {
+        throw Exception('API temporariamente indisponível');
+      }
+      
       final currencies = await _currencyService.getCurrencies();
       
       setState(() {
@@ -52,60 +57,82 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
     }
   }
   
-  void _selectCurrency(Currency currency) {
+  Future<void> _selectCurrency(Currency currency) async {
     setState(() {
       _selectedCurrency = currency;
+      _isLoadingHistory = true;
+    });
+    
+    try {
+      // Carregar histórico dos últimos 30 dias
+      final history = await _currencyService.getCurrencyHistory(currency.code, 30);
       
-      // Generate random mock data for the graph
-      final random = Random();
-      _mockHistoryData = List.generate(
-        30,
-        (index) => FlSpot(
-          (index + 1).toDouble(),
-          currency.value * (1 + (random.nextDouble() - 0.5) * 0.1),
+      setState(() {
+        _currencyHistory = history;
+        _isLoadingHistory = false;
+      });
+    } catch (e) {
+      setState(() {
+        _currencyHistory = [];
+        _isLoadingHistory = false;
+      });
+      
+      if (!mounted) return;
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Falha ao carregar histórico: $e'),
+          backgroundColor: Colors.orange,
         ),
       );
-    });
+    }
   }
   
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Cotações'),
+        title: const Text('Cotações em Tempo Real'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadCurrencies,
+            tooltip: 'Atualizar cotações',
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _loadCurrencies,
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
             : _errorMessage.isNotEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.error_outline,
-                          size: 64,
-                          color: Colors.red[300],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          _errorMessage,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.red[700],
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                        ElevatedButton(
-                          onPressed: _loadCurrencies,
-                          child: const Text('Tentar novamente'),
-                        ),
-                      ],
-                    ),
-                  )
+                ? _buildErrorView()
                 : Column(
                     children: [
+                      // API Status indicator
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(8),
+                        color: Colors.green.withOpacity(0.1),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.wifi,
+                              color: Colors.green,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Conectado à API AwesomeAPI - Dados em tempo real',
+                              style: TextStyle(
+                                color: Colors.green[700],
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      
                       // Currency detail view
                       if (_selectedCurrency != null) _buildCurrencyDetailView(),
                       
@@ -126,13 +153,52 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
     );
   }
   
+  Widget _buildErrorView() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.error_outline,
+            size: 64,
+            color: Colors.red[300],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            _errorMessage,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.red[700],
+            ),
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: _loadCurrencies,
+            child: const Text('Tentar novamente'),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Dados fornecidos pela AwesomeAPI',
+            style: TextStyle(
+              color: Colors.grey[600],
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
   Widget _buildCurrencyCard(Currency currency) {
     final currencyFormat = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
     final isPositiveVariation = currency.variation >= 0;
     
+    final isSelected = _selectedCurrency?.code == currency.code;
+    
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      elevation: 2,
+      elevation: isSelected ? 4 : 2,
+      color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.1) : null,
       child: InkWell(
         onTap: () => _selectCurrency(currency),
         borderRadius: BorderRadius.circular(8),
@@ -145,15 +211,20 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: Theme.of(context).primaryColor.withOpacity(0.1),
+                  color: isSelected 
+                      ? Theme.of(context).primaryColor
+                      : Theme.of(context).primaryColor.withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
                 child: Center(
                   child: Text(
-                    currency.code.substring(0, 3),
+                    currency.code,
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
-                      color: Theme.of(context).primaryColor,
+                      color: isSelected 
+                          ? Colors.white
+                          : Theme.of(context).primaryColor,
+                      fontSize: 12,
                     ),
                   ),
                 ),
@@ -170,7 +241,10 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                       ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
+                    const SizedBox(height: 4),
                     Text(
                       'Atualizado: ${DateFormat('dd/MM HH:mm').format(currency.lastUpdate)}',
                       style: TextStyle(
@@ -190,26 +264,42 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
                     currencyFormat.format(currency.value),
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
+                      fontSize: 16,
                     ),
                   ),
-                  Row(
-                    children: [
-                      Icon(
-                        isPositiveVariation
-                            ? Icons.arrow_upward
-                            : Icons.arrow_downward,
-                        size: 12,
-                        color: isPositiveVariation ? Colors.green : Colors.red,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${isPositiveVariation ? '+' : ''}${currency.variation.toStringAsFixed(2)}%',
-                        style: TextStyle(
+                  const SizedBox(height: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isPositiveVariation
+                          ? Colors.green.withOpacity(0.1)
+                          : Colors.red.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isPositiveVariation
+                              ? Icons.arrow_upward
+                              : Icons.arrow_downward,
+                          size: 12,
                           color: isPositiveVariation ? Colors.green : Colors.red,
-                          fontSize: 12,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 4),
+                        Text(
+                          '${isPositiveVariation ? '+' : ''}${currency.variation.toStringAsFixed(2)}%',
+                          style: TextStyle(
+                            color: isPositiveVariation ? Colors.green : Colors.red,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -245,11 +335,13 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                '${currency.code} - ${currency.name}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
+              Expanded(
+                child: Text(
+                  '${currency.code} - ${currency.name}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
                 ),
               ),
               IconButton(
@@ -257,6 +349,7 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
                 onPressed: () {
                   setState(() {
                     _selectedCurrency = null;
+                    _currencyHistory = [];
                   });
                 },
               ),
@@ -310,81 +403,121 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
           
           const SizedBox(height: 16),
           
-          // Chart
+          // Chart or loading indicator
           Container(
             height: 150,
             padding: const EdgeInsets.all(8),
-            child: LineChart(
-              LineChartData(
-                gridData: FlGridData(show: false),
-                titlesData: FlTitlesData(
-                  rightTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  topTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      getTitlesWidget: (value, meta) {
-                        // Only show some dates to avoid overcrowding
-                        if (value % 5 != 0) return const SizedBox.shrink();
-                        
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 8.0),
-                          child: Text(
-                            '${value.toInt()}d',
-                            style: const TextStyle(
-                              fontSize: 10,
-                              color: Colors.grey,
+            child: _isLoadingHistory
+                ? const Center(child: CircularProgressIndicator())
+                : _currencyHistory.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.show_chart,
+                              size: 48,
+                              color: Colors.grey[400],
                             ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-                borderData: FlBorderData(show: false),
-                lineTouchData: LineTouchData(
-                  touchTooltipData: LineTouchTooltipData(
-                    tooltipBgColor: Theme.of(context).colorScheme.background,
-                    getTooltipItems: (touchedSpots) {
-                      return touchedSpots.map((spot) {
-                        return LineTooltipItem(
-                          currencyFormat.format(spot.y),
-                          TextStyle(color: Theme.of(context).primaryColor),
-                        );
-                      }).toList();
-                    },
-                  ),
-                ),
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: _mockHistoryData,
-                    isCurved: true,
-                    color: Theme.of(context).primaryColor,
-                    barWidth: 2,
-                    isStrokeCapRound: true,
-                    dotData: FlDotData(show: false),
-                    belowBarData: BarAreaData(
-                      show: true,
-                      color: Theme.of(context).primaryColor.withOpacity(0.1),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Histórico não disponível',
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : _buildChart(),
           ),
           
           const SizedBox(height: 16),
           
           // Info text
           Text(
-            'Dados históricos dos últimos 30 dias',
+            'Última atualização: ${DateFormat('dd/MM/yyyy HH:mm').format(currency.lastUpdate)}',
             style: TextStyle(
               color: Colors.grey[600],
               fontSize: 12,
+            ),
+          ),
+          
+          Text(
+            'Fonte: AwesomeAPI - Dados do Banco Central',
+            style: TextStyle(
+              color: Colors.grey[600],
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildChart() {
+    if (_currencyHistory.isEmpty) return const SizedBox.shrink();
+    
+    final spots = _currencyHistory.reversed.toList().asMap().entries.map((entry) {
+      return FlSpot(entry.key.toDouble(), entry.value.value);
+    }).toList();
+    
+    return LineChart(
+      LineChartData(
+        gridData: FlGridData(show: false),
+        titlesData: FlTitlesData(
+          rightTitles: AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          topTitles: AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              getTitlesWidget: (value, meta) {
+                if (value % 5 != 0) return const SizedBox.shrink();
+                
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: Text(
+                    '${value.toInt()}d',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: Colors.grey,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        borderData: FlBorderData(show: false),
+        lineTouchData: LineTouchData(
+          touchTooltipData: LineTouchTooltipData(
+            tooltipBgColor: Theme.of(context).colorScheme.background,
+            getTooltipItems: (touchedSpots) {
+              return touchedSpots.map((spot) {
+                final currencyFormat = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
+                return LineTooltipItem(
+                  currencyFormat.format(spot.y),
+                  TextStyle(color: Theme.of(context).primaryColor),
+                );
+              }).toList();
+            },
+          ),
+        ),
+        lineBarsData: [
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            color: Theme.of(context).primaryColor,
+            barWidth: 2,
+            isStrokeCapRound: true,
+            dotData: FlDotData(show: false),
+            belowBarData: BarAreaData(
+              show: true,
+              color: Theme.of(context).primaryColor.withOpacity(0.1),
             ),
           ),
         ],
